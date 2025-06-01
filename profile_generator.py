@@ -224,7 +224,7 @@ async def generate_profile(answers: Dict[str, str]) -> Dict[str, str]:
                 
                 # Генерируем профиль с помощью OpenAI
                 response = await client.chat.completions.create(
-                    model="gpt-4",
+                    model="gpt-4o",
                     temperature=0.7,
                     messages=[
                         {

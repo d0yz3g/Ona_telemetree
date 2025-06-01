@@ -192,7 +192,8 @@ async def analyze_profile(user_profile: Dict[str, Any], query: str, user_id: Opt
             response = await client.chat.completions.create(
                 model="gpt-4o",
                 temperature=0.7,
-                messages=messages
+                messages=messages,
+                response_format={"type": "json_object"}
             )
             
             # Получаем сгенерированный ответ
@@ -323,7 +324,7 @@ async def get_profile_insights(user_profile: Dict[str, Any]) -> Dict[str, List[s
         
         # Генерируем ответ
         response = await client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4o",
             temperature=0.7,
             messages=messages,
             response_format={"type": "json_object"}

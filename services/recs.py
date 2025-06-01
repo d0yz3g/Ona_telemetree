@@ -180,7 +180,7 @@ async def detect_intent_with_ai(text: str) -> Tuple[str, float]:
     
     try:
         response = await client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             temperature=0.3,
             messages=[
                 {
@@ -294,7 +294,7 @@ async def generate_response(text: str, user_id: int) -> str:
         
         try:
             response = await client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o",
                 temperature=0.7,
                 messages=[
                     {

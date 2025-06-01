@@ -336,9 +336,9 @@ async def generate_personalized_response(
             # Добавляем текущее сообщение пользователя
             messages.append({"role": "user", "content": message_text})
         
-        # Определяем модель для использования (предпочтительно GPT-3.5-turbo как наиболее доступную)
-        models = ["gpt-3.5-turbo", "gpt-3.5-turbo-0125"]
-        model = models[0]  # По умолчанию используем базовую модель gpt-3.5-turbo
+        # Определяем модель для использования (предпочтительно GPT-4o)
+        models = ["gpt-4o"]
+        model = models[0]  # По умолчанию используем GPT-4o
         
         logger.info(f"Отправка запроса к OpenAI API с моделью {model}")
         
