@@ -48,6 +48,11 @@ except ImportError:
 # Настройка логирования
 logger = logging.getLogger(__name__)
 
+# Получаем OPENAI_API_KEY из переменных окружения
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    logger.warning("OPENAI_API_KEY не найден в переменных окружения. Функция генерации медитаций будет работать в демо-режиме.")
+
 # Инициализация клиента OpenAI с API-ключом из переменных окружения (если доступен)
 http_client = httpx.AsyncClient()
 client = None
