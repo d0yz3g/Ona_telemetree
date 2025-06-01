@@ -8,6 +8,8 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import FSInputFile
+from openai import AsyncOpenAI
+import httpx
 
 from button_states import MeditationStates
 
@@ -45,6 +47,19 @@ except ImportError:
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
+
+# Инициализация клиента OpenAI
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+http_client = httpx.AsyncClient()
+client = None
+if OPENAI_API_KEY:
+    try:
+        client = AsyncOpenAI(
+            api_key=OPENAI_API_KEY,
+            http_client=http_client
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при инициализации OpenAI API: {e}")
 
 # Создаем роутер для обработки медитаций
 meditation_router = Router()
@@ -165,6 +180,50 @@ async def cmd_meditate(message: Message, state: FSMContext):
     # Устанавливаем состояние выбора типа медитации
     await state.set_state(MeditationStates.selecting_type)
 
+# Функция для генерации персонализированной медитации на основе профиля пользователя
+async def generate_personalized_meditation(profile_text: str, user_name: str = "", meditation_type: str = "relax") -> str:
+    """
+    Генерирует персонализированную медитацию на основе психологического профиля пользователя.
+    
+    Args:
+        profile_text: Текст психологического профиля
+        user_name: Имя пользователя
+        meditation_type: Тип медитации (relax, focus, sleep)
+        
+    Returns:
+        str: Текст персонализированной медитации
+    """
+    if not client or not profile_text:
+        logger.warning("OpenAI API недоступен или профиль пользователя отсутствует. Используем стандартную медитацию.")
+        return MEDITATION_TEXTS.get(meditation_type, MEDITATION_TEXTS["relax"])
+    
+    try:
+        # Определяем тип медитации для промпта
+        meditation_purpose = {
+            "relax": "расслабления и снятия стресса",
+            "focus": "фокусировки и концентрации",
+            "sleep": "подготовки ко сну и глубокого расслабления"
+        }.get(meditation_type, "расслабления")
+        
+        # Подготовка системного промпта
+        system_prompt = f"Ты — AI-наставник и гид по внутреннему миру. Создай медитацию для участницы на основе её психологического профиля (см. ниже). Твоя медитация должна быть поэтичной, мягкой и глубоко персонализированной. Используй метафоры, образы и темы, отражающие её внутренние силы, архетип, импульсы и эмоции. Обращайся к участнице на «ты». Избегай общих формулировок."
+        
+        # Генерируем персонализированную медитацию
+        response = await client.chat.completions.create(
+            model="gpt-4",
+            temperature=0.7,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Создай медитацию для {user_name if user_name else 'участницы'} на основе её психологического профиля.\n\nПрофиль:\n{profile_text}\n\nМедитация должна быть направлена на {meditation_purpose}, длительностью 5-7 минут."}
+            ]
+        )
+        
+        # Возвращаем сгенерированную медитацию
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"Ошибка при генерации персонализированной медитации: {e}")
+        return MEDITATION_TEXTS.get(meditation_type, MEDITATION_TEXTS["relax"])
+
 # Обработчики для инлайн-кнопок медитаций
 @meditation_router.callback_query(F.data == "meditate_relax")
 async def get_relax_meditation(callback: CallbackQuery, state: FSMContext):
@@ -189,9 +248,21 @@ async def get_relax_meditation(callback: CallbackQuery, state: FSMContext):
             "Это может занять несколько секунд."
         )
         
+        # Получаем данные пользователя
+        user_data = await state.get_data()
+        profile_text = user_data.get("profile_text", "")
+        user_name = user_data.get("name", "")
+        
+        # Генерируем персонализированную медитацию
+        meditation_text = await generate_personalized_meditation(
+            profile_text=profile_text,
+            user_name=user_name,
+            meditation_type="relax"
+        )
+        
         # Генерируем аудио с помощью ElevenLabs API
         audio_path, error_reason = await generate_audio(
-            text=MEDITATION_TEXTS["relax"],
+            text=meditation_text,
             user_id=callback.from_user.id,
             meditation_type="relax"
         )
@@ -213,13 +284,13 @@ async def get_relax_meditation(callback: CallbackQuery, state: FSMContext):
                     logger.error(f"Ошибка при отправке голосового сообщения: {e}")
                     # Если не удалось отправить голосовое, отправляем текст медитации
                     await callback.message.answer(
-                        f"<b>Не удалось отправить аудио. Вот текст медитации:</b>\n\n{MEDITATION_TEXTS['relax']}",
+                        f"<b>Не удалось отправить аудио. Вот текст медитации:</b>\n\n{meditation_text}",
                         parse_mode="HTML"
                     )
             else:
                 logger.error(f"Файл {audio_path} не существует")
                 await callback.message.answer(
-                    f"<b>Не удалось создать аудио-файл. Вот текст медитации:</b>\n\n{MEDITATION_TEXTS['relax']}",
+                    f"<b>Не удалось создать аудио-файл. Вот текст медитации:</b>\n\n{meditation_text}",
                     parse_mode="HTML"
                 )
             
@@ -237,14 +308,14 @@ async def get_relax_meditation(callback: CallbackQuery, state: FSMContext):
                     "⚠️ <b>Превышен лимит генерации аудио</b>\n\n"
                     "К сожалению, достигнут ежедневный лимит генерации аудио. "
                     "Ниже приведен текст медитации, который вы можете прочитать самостоятельно.\n\n"
-                    f"{MEDITATION_TEXTS['relax']}",
+                    f"{meditation_text}",
                     parse_mode="HTML"
                 )
                 logger.info(f"Пользователь {callback.from_user.id} получил текст медитации из-за превышения квоты")
             else:
                 await callback.message.answer(
                     f"<b>Не удалось создать аудио-медитацию: {error_reason}</b>\n\n"
-                    f"Вот текст медитации, который вы можете прочитать самостоятельно:\n\n{MEDITATION_TEXTS['relax']}",
+                    f"Вот текст медитации, который вы можете прочитать самостоятельно:\n\n{meditation_text}",
                     parse_mode="HTML"
                 )
     except Exception as e:
@@ -279,9 +350,21 @@ async def get_focus_meditation(callback: CallbackQuery, state: FSMContext):
             "Это может занять несколько секунд."
         )
         
+        # Получаем данные пользователя
+        user_data = await state.get_data()
+        profile_text = user_data.get("profile_text", "")
+        user_name = user_data.get("name", "")
+        
+        # Генерируем персонализированную медитацию
+        meditation_text = await generate_personalized_meditation(
+            profile_text=profile_text,
+            user_name=user_name,
+            meditation_type="focus"
+        )
+        
         # Генерируем аудио с помощью ElevenLabs API
         audio_path, error_reason = await generate_audio(
-            text=MEDITATION_TEXTS["focus"],
+            text=meditation_text,
             user_id=callback.from_user.id,
             meditation_type="focus"
         )
@@ -296,20 +379,20 @@ async def get_focus_meditation(callback: CallbackQuery, state: FSMContext):
                     # Отправляем голосовое сообщение
                     await callback.message.answer_voice(
                         FSInputFile(audio_path),
-                        caption="🧠 Медитация для фокусировки. Сядьте в удобной позе и следуйте инструкциям."
+                        caption="🧠 Медитация для фокусировки. Сядьте удобно и следуйте инструкциям."
                     )
                     logger.info(f"Голосовое сообщение успешно отправлено пользователю {callback.from_user.id}")
                 except Exception as e:
                     logger.error(f"Ошибка при отправке голосового сообщения: {e}")
                     # Если не удалось отправить голосовое, отправляем текст медитации
                     await callback.message.answer(
-                        f"<b>Не удалось отправить аудио. Вот текст медитации:</b>\n\n{MEDITATION_TEXTS['focus']}",
+                        f"<b>Не удалось отправить аудио. Вот текст медитации:</b>\n\n{meditation_text}",
                         parse_mode="HTML"
                     )
             else:
                 logger.error(f"Файл {audio_path} не существует")
                 await callback.message.answer(
-                    f"<b>Не удалось создать аудио-файл. Вот текст медитации:</b>\n\n{MEDITATION_TEXTS['focus']}",
+                    f"<b>Не удалось создать аудио-файл. Вот текст медитации:</b>\n\n{meditation_text}",
                     parse_mode="HTML"
                 )
             
@@ -327,14 +410,14 @@ async def get_focus_meditation(callback: CallbackQuery, state: FSMContext):
                     "⚠️ <b>Превышен лимит генерации аудио</b>\n\n"
                     "К сожалению, достигнут ежедневный лимит генерации аудио. "
                     "Ниже приведен текст медитации, который вы можете прочитать самостоятельно.\n\n"
-                    f"{MEDITATION_TEXTS['focus']}",
+                    f"{meditation_text}",
                     parse_mode="HTML"
                 )
                 logger.info(f"Пользователь {callback.from_user.id} получил текст медитации из-за превышения квоты")
             else:
                 await callback.message.answer(
                     f"<b>Не удалось создать аудио-медитацию: {error_reason}</b>\n\n"
-                    f"Вот текст медитации, который вы можете прочитать самостоятельно:\n\n{MEDITATION_TEXTS['focus']}",
+                    f"Вот текст медитации, который вы можете прочитать самостоятельно:\n\n{meditation_text}",
                     parse_mode="HTML"
                 )
     except Exception as e:
@@ -356,8 +439,8 @@ async def get_sleep_meditation(callback: CallbackQuery, state: FSMContext):
     # Отправляем текст медитации
     await callback.message.edit_text(
         "😴 <b>Медитация для сна:</b>\n\n"
-        "Сейчас вы получите голосовую медитацию. Рекомендуется слушать "
-        "ее лежа в кровати перед сном.",
+        "Сейчас вы получите голосовую медитацию. Найдите удобное место, "
+        "где вас не будут беспокоить в течение 10-15 минут.",
         reply_markup=get_meditation_keyboard(),
         parse_mode="HTML"
     )
@@ -369,9 +452,21 @@ async def get_sleep_meditation(callback: CallbackQuery, state: FSMContext):
             "Это может занять несколько секунд."
         )
         
+        # Получаем данные пользователя
+        user_data = await state.get_data()
+        profile_text = user_data.get("profile_text", "")
+        user_name = user_data.get("name", "")
+        
+        # Генерируем персонализированную медитацию
+        meditation_text = await generate_personalized_meditation(
+            profile_text=profile_text,
+            user_name=user_name,
+            meditation_type="sleep"
+        )
+        
         # Генерируем аудио с помощью ElevenLabs API
         audio_path, error_reason = await generate_audio(
-            text=MEDITATION_TEXTS["sleep"],
+            text=meditation_text,
             user_id=callback.from_user.id,
             meditation_type="sleep"
         )
@@ -386,20 +481,20 @@ async def get_sleep_meditation(callback: CallbackQuery, state: FSMContext):
                     # Отправляем голосовое сообщение
                     await callback.message.answer_voice(
                         FSInputFile(audio_path),
-                        caption="😴 Медитация для сна. Лягте удобно и следуйте инструкциям."
+                        caption="😴 Медитация для сна. Найдите удобное место и следуйте инструкциям."
                     )
                     logger.info(f"Голосовое сообщение успешно отправлено пользователю {callback.from_user.id}")
                 except Exception as e:
                     logger.error(f"Ошибка при отправке голосового сообщения: {e}")
                     # Если не удалось отправить голосовое, отправляем текст медитации
                     await callback.message.answer(
-                        f"<b>Не удалось отправить аудио. Вот текст медитации:</b>\n\n{MEDITATION_TEXTS['sleep']}",
+                        f"<b>Не удалось отправить аудио. Вот текст медитации:</b>\n\n{meditation_text}",
                         parse_mode="HTML"
                     )
             else:
                 logger.error(f"Файл {audio_path} не существует")
                 await callback.message.answer(
-                    f"<b>Не удалось создать аудио-файл. Вот текст медитации:</b>\n\n{MEDITATION_TEXTS['sleep']}",
+                    f"<b>Не удалось создать аудио-файл. Вот текст медитации:</b>\n\n{meditation_text}",
                     parse_mode="HTML"
                 )
             
@@ -417,14 +512,14 @@ async def get_sleep_meditation(callback: CallbackQuery, state: FSMContext):
                     "⚠️ <b>Превышен лимит генерации аудио</b>\n\n"
                     "К сожалению, достигнут ежедневный лимит генерации аудио. "
                     "Ниже приведен текст медитации, который вы можете прочитать самостоятельно.\n\n"
-                    f"{MEDITATION_TEXTS['sleep']}",
+                    f"{meditation_text}",
                     parse_mode="HTML"
                 )
                 logger.info(f"Пользователь {callback.from_user.id} получил текст медитации из-за превышения квоты")
             else:
                 await callback.message.answer(
                     f"<b>Не удалось создать аудио-медитацию: {error_reason}</b>\n\n"
-                    f"Вот текст медитации, который вы можете прочитать самостоятельно:\n\n{MEDITATION_TEXTS['sleep']}",
+                    f"Вот текст медитации, который вы можете прочитать самостоятельно:\n\n{meditation_text}",
                     parse_mode="HTML"
                 )
     except Exception as e:
