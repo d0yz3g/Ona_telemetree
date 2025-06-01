@@ -79,35 +79,47 @@ async def handle_text_message(message: Message, state: FSMContext):
     # Получаем данные пользователя из состояния
     user_data = await state.get_data()
     
+    # Проверяем наличие профиля
+    profile_completed = user_data.get("profile_completed", False)
+    profile_text = user_data.get("profile_text", "")
+    profile_details = user_data.get("profile_details", "")
+    
+    # Если в profile_text пусто, но есть profile_details, копируем данные
+    if not profile_text and profile_details:
+        profile_text = profile_details
+        await state.update_data(profile_text=profile_text)
+        logger.info(f"Скопировано {len(profile_details)} символов из profile_details в profile_text")
+    
     # Проверяем, есть ли у пользователя профиль
-    if not user_data.get("profile_completed", False):
-        # Проверяем, было ли уже отправлено приглашение пройти опрос
-        # чтобы избежать дублирования сообщений
-        last_message_sent = user_data.get("last_message_sent", "")
-        if "пройти опрос" in last_message_sent:
-            # Если уже отправляли приглашение пройти опрос, не отправляем его снова
-            return
+    if not profile_completed and not profile_text:
+        # Создаем приглашение пройти опрос только для определенных типов сообщений
+        if is_profile_query(message.text):
+            # Проверяем, было ли уже отправлено приглашение пройти опрос
+            # чтобы избежать дублирования сообщений
+            last_message_sent = user_data.get("last_message_sent", "")
+            if "пройти опрос" in last_message_sent:
+                # Если уже отправляли приглашение пройти опрос, не отправляем его снова
+                return
+                
+            # Если профиля нет и запрашивают профиль, предлагаем пройти опрос
+            builder = InlineKeyboardBuilder()
+            builder.button(text="✅ Начать опрос", callback_data="start_survey")
             
-        # Если профиля нет, предлагаем пройти опрос
-        builder = InlineKeyboardBuilder()
-        builder.button(text="✅ Начать опрос", callback_data="start_survey")
-        
-        invite_message = "У вас еще нет полного профиля. Пожалуйста, пройдите опрос для создания психологического профиля."
-        await message.answer(invite_message, reply_markup=builder.as_markup())
-        
-        # Сохраняем последнее отправленное сообщение, чтобы избежать дублирования
-        await state.update_data(last_message_sent=invite_message)
-        return
+            invite_message = "У вас еще нет полного профиля. Пожалуйста, пройдите опрос для создания психологического профиля."
+            await message.answer(invite_message, reply_markup=builder.as_markup())
+            
+            # Сохраняем последнее отправленное сообщение, чтобы избежать дублирования
+            await state.update_data(last_message_sent=invite_message)
+            return
     
     # Показываем индикатор "печатает..."
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
     # Получаем тип личности
     personality_type = user_data.get("personality_type", None)
-    profile_text = user_data.get("profile_text", "")
     
     # Принудительно логируем статус профиля для отладки
-    logger.info(f"Статус профиля пользователя {message.from_user.id}: profile_completed={user_data.get('profile_completed', False)}, personality_type={personality_type}")
+    logger.info(f"Статус профиля пользователя {message.from_user.id}: profile_completed={profile_completed}, personality_type={personality_type}, profile_text_length={len(profile_text)}")
     
     # Если тип личности не указан явно, определяем его из текста профиля
     if not personality_type and profile_text:
@@ -116,9 +128,15 @@ async def handle_text_message(message: Message, state: FSMContext):
         await state.update_data(personality_type=personality_type)
         logger.info(f"Определен тип личности из профиля: {personality_type}")
     
+    # Если все еще нет типа личности, используем стандартный тип
+    if not personality_type:
+        personality_type = "Интеллектуальный"  # Дефолтный тип
+        await state.update_data(personality_type=personality_type)
+        logger.info(f"Установлен дефолтный тип личности: {personality_type}")
+    
     # Создаем словарь с профилем пользователя
     user_profile = {
-        "personality_type": personality_type or "Интеллектуальный",
+        "personality_type": personality_type,
         "profile_text": profile_text
     }
     

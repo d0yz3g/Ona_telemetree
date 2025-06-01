@@ -484,6 +484,7 @@ async def complete_survey(message: Message, state: FSMContext, answers: Dict[str
             answers=answers,
             profile_completed=True,
             profile_details=detailed_profile,
+            profile_text=detailed_profile,
             personality_type=primary_type,
             secondary_type=secondary_type,
             type_counts=type_counts
@@ -492,7 +493,8 @@ async def complete_survey(message: Message, state: FSMContext, answers: Dict[str
         # Проверяем, что профили действительно сохранились
         verification_data = await state.get_data()
         saved_details = verification_data.get("profile_details", "")
-        logger.info(f"Проверка сохранения детального профиля: сохранено {len(saved_details)} символов")
+        saved_text = verification_data.get("profile_text", "")
+        logger.info(f"Проверка сохранения детального профиля: сохранено {len(saved_details)} символов в profile_details, {len(saved_text)} символов в profile_text")
         
         # Удаляем сообщение о генерации профиля
         await processing_message.delete()
@@ -610,6 +612,7 @@ async def confirm_profile_reset(callback: CallbackQuery, state: FSMContext):
         answers={},
         profile_completed=False,
         profile_text="",
+        profile_details="",
         personality_type=None,
         waiting_for_vasini_confirmation=False,
         question_index=0,
