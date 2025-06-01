@@ -25,13 +25,14 @@ if OPENAI_API_KEY:
     except Exception as e:
         logger.error(f"Ошибка при инициализации OpenAI API: {e}")
 
-async def analyze_profile(user_profile: Dict[str, Any], query: str) -> str:
+async def analyze_profile(user_profile: Dict[str, Any], query: str, user_id: Optional[int] = None) -> str:
     """
     Анализирует профиль пользователя на основе его запроса, используя структуру профайлинга 2.0.
     
     Args:
         user_profile: Профиль пользователя (включает тип личности и полный текст профиля)
         query: Запрос пользователя об анализе профиля
+        user_id: ID пользователя (для сохранения контекста диалога)
         
     Returns:
         str: Результат анализа профиля
@@ -48,6 +49,15 @@ async def analyze_profile(user_profile: Dict[str, Any], query: str) -> str:
         return "У вас еще нет полного профиля. Пожалуйста, пройдите опрос для создания психологического профиля."
     
     try:
+        # Импортируем класс MemoryContext (если используется для сохранения контекста диалога)
+        if user_id is not None:
+            from communication_handler import get_user_memory_context
+            memory_context = get_user_memory_context(user_id)
+            # Устанавливаем профиль пользователя в контексте
+            memory_context.set_user_profile(user_profile)
+            # Добавляем запрос пользователя в историю
+            memory_context.add_message("user", query)
+        
         # Создаем промпт для OpenAI
         system_prompt = """Ты - профессиональный аналитик психологических профилей.
 
@@ -70,18 +80,31 @@ async def analyze_profile(user_profile: Dict[str, Any], query: str) -> str:
 Избегай общих фраз и поверхностных советов, которые подошли бы любому человеку.
 Будь конкретным, опирайся на детали профиля."""
 
+        # Проверяем, есть ли контекст диалога
+        if user_id is not None and 'memory_context' in locals():
+            # Добавляем системное сообщение в память
+            memory_context.add_message("system", system_prompt)
+            messages = memory_context.get_full_context()
+        else:
+            # Если нет контекста, используем стандартный формат сообщений
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Профиль пользователя:\n\n{profile_text}\n\nЗапрос пользователя: {query}"}
+            ]
+
         # Отправляем запрос в OpenAI
         response = await client.chat.completions.create(
             model="gpt-4o",
             temperature=0.7,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Профиль пользователя:\n\n{profile_text}\n\nЗапрос пользователя: {query}"}
-            ]
+            messages=messages
         )
         
         # Получаем сгенерированный ответ
         analysis_result = response.choices[0].message.content
+        
+        # Сохраняем ответ в истории диалога
+        if user_id is not None and 'memory_context' in locals():
+            memory_context.add_message("assistant", analysis_result)
         
         logger.info(f"Анализ профиля успешно выполнен для типа личности: {personality_type}")
         return analysis_result

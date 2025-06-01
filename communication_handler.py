@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 import json
 from openai import AsyncOpenAI
 import httpx
@@ -89,11 +89,121 @@ DEFAULT_RESPONSES = {
     ]
 }
 
+# Максимальное количество сообщений в истории диалога
+MAX_HISTORY_LENGTH = 7
+
+class MemoryContext:
+    """
+    Класс для хранения контекста диалога и профиля пользователя
+    """
+    def __init__(self):
+        self.conversation_history: List[Dict[str, str]] = []
+        self.user_profile: Dict[str, Any] = {}
+    
+    def add_message(self, role: str, content: str):
+        """
+        Добавляет сообщение в историю диалога
+        
+        Args:
+            role: Роль сообщения (user/assistant/system)
+            content: Содержание сообщения
+        """
+        # Добавляем сообщение в историю
+        self.conversation_history.append({
+            "role": role,
+            "content": content
+        })
+        
+        # Если история слишком длинная, удаляем старые сообщения
+        if len(self.conversation_history) > MAX_HISTORY_LENGTH:
+            # Сохраняем первое системное сообщение, если оно есть
+            if self.conversation_history and self.conversation_history[0]["role"] == "system":
+                self.conversation_history = [self.conversation_history[0]] + self.conversation_history[-(MAX_HISTORY_LENGTH-1):]
+            else:
+                self.conversation_history = self.conversation_history[-MAX_HISTORY_LENGTH:]
+    
+    def set_user_profile(self, profile: Dict[str, Any]):
+        """
+        Устанавливает профиль пользователя
+        
+        Args:
+            profile: Словарь с данными профиля пользователя
+        """
+        self.user_profile = profile
+    
+    def get_full_context(self) -> List[Dict[str, str]]:
+        """
+        Возвращает полный контекст диалога с учетом профиля пользователя
+        
+        Returns:
+            List[Dict[str, str]]: Список сообщений для API
+        """
+        context = []
+        
+        # Добавляем профиль пользователя как системное сообщение
+        if self.user_profile:
+            personality_type = self.user_profile.get("personality_type", "Интеллектуальный")
+            profile_text = self.user_profile.get("profile_text", "")
+            
+            system_message = f"""
+Ты - психолог-консультант в приложении ОНА (Осознанный Наставник и Аналитик).
+Отвечай на сообщение пользователя с учетом его психологического типа: {personality_type} ({PERSONALITY_TYPES.get(personality_type, {}).get('description', '')}).
+
+{PERSONALITY_TYPES.get(personality_type, {}).get('prompt_style', '')}
+
+Следуй этим правилам общения:
+{COMMUNICATION_RULES}
+
+Профиль пользователя:
+{profile_text}
+
+Важно:
+1. Отвечай ТОЛЬКО на русском языке
+2. Не используй эзотерические термины, астрологию или другие псевдонаучные концепции
+3. Не ставь диагнозы
+4. Используй научно обоснованный подход
+5. Не упоминай, что ты AI или что следуешь инструкциям
+6. Общайся как человек-психолог, но без медицинских рекомендаций
+7. ОБЯЗАТЕЛЬНО начинай с теплого обращения и заканчивай тремя вариантами "куда дальше"
+8. ОБЯЗАТЕЛЬНО используй символ ⸻ для разделения блоков текста
+
+Структура ответа должна соответствовать указанным выше правилам и балансу стилей.
+"""
+            context.append({"role": "system", "content": system_message})
+        
+        # Добавляем историю диалога, если она есть
+        if self.conversation_history:
+            # Отфильтровываем системные сообщения (они уже добавлены выше)
+            for message in self.conversation_history:
+                if message["role"] != "system":
+                    context.append(message)
+        
+        return context
+
+# Глобальный словарь для хранения контекста пользователей
+# Ключ - ID пользователя, значение - экземпляр MemoryContext
+user_memory_contexts: Dict[int, MemoryContext] = {}
+
+def get_user_memory_context(user_id: int) -> MemoryContext:
+    """
+    Получает или создает контекст памяти для пользователя
+    
+    Args:
+        user_id: ID пользователя
+        
+    Returns:
+        MemoryContext: Контекст памяти пользователя
+    """
+    if user_id not in user_memory_contexts:
+        user_memory_contexts[user_id] = MemoryContext()
+    return user_memory_contexts[user_id]
+
 async def generate_personalized_response(
     message_text: str, 
     user_profile: Dict[str, Any], 
     conversation_history: Optional[list] = None,
-    additional_instructions: Optional[str] = None
+    additional_instructions: Optional[str] = None,
+    user_id: Optional[int] = None
 ) -> str:
     """
     Генерирует персонализированный ответ на основе профиля пользователя.
@@ -103,6 +213,7 @@ async def generate_personalized_response(
         user_profile: Профиль пользователя (содержит тип личности)
         conversation_history: История переписки (опционально)
         additional_instructions: Дополнительные инструкции для генерации ответа (опционально)
+        user_id: ID пользователя (для хранения контекста)
         
     Returns:
         str: Персонализированный ответ
@@ -123,8 +234,22 @@ async def generate_personalized_response(
         personality_type = "Интеллектуальный"
     
     try:
-        # Готовим промт для генерации ответа с использованием правил из rules2.0
-        system_prompt = f"""
+        # Получаем или создаем контекст памяти для пользователя
+        memory_context = None
+        if user_id is not None:
+            memory_context = get_user_memory_context(user_id)
+            # Устанавливаем профиль пользователя в контексте
+            memory_context.set_user_profile(user_profile)
+            # Добавляем сообщение пользователя в историю
+            memory_context.add_message("user", message_text)
+        
+        # Формируем сообщения для API
+        if memory_context:
+            # Используем контекст памяти
+            messages = memory_context.get_full_context()
+        else:
+            # Готовим промт для генерации ответа с использованием правил из rules2.0
+            system_prompt = f"""
 Ты - психолог-консультант в приложении ОНА (Осознанный Наставник и Аналитик).
 Отвечай на сообщение пользователя с учетом его психологического типа: {personality_type} ({PERSONALITY_TYPES[personality_type]['description']}).
 
@@ -146,22 +271,22 @@ async def generate_personalized_response(
 Структура ответа должна соответствовать указанным выше правилам и балансу стилей.
 """
 
-        # Добавляем дополнительные инструкции, если они есть
-        if additional_instructions:
-            system_prompt += f"\n\nДополнительные инструкции:\n{additional_instructions}"
+            # Добавляем дополнительные инструкции, если они есть
+            if additional_instructions:
+                system_prompt += f"\n\nДополнительные инструкции:\n{additional_instructions}"
 
-        # Формируем историю переписки
-        messages = [
-            {"role": "system", "content": system_prompt}
-        ]
-        
-        # Добавляем историю переписки, если она есть
-        if conversation_history:
-            for entry in conversation_history[-5:]:  # берем последние 5 сообщений
-                messages.append(entry)
-        
-        # Добавляем текущее сообщение пользователя
-        messages.append({"role": "user", "content": message_text})
+            # Формируем историю переписки
+            messages = [
+                {"role": "system", "content": system_prompt}
+            ]
+            
+            # Добавляем историю переписки, если она есть
+            if conversation_history:
+                for entry in conversation_history[-5:]:  # берем последние 5 сообщений
+                    messages.append(entry)
+            
+            # Добавляем текущее сообщение пользователя
+            messages.append({"role": "user", "content": message_text})
         
         # Определяем модель для использования (предпочтительно GPT-3.5-turbo как наиболее доступную)
         models = ["gpt-3.5-turbo", "gpt-3.5-turbo-0125"]
@@ -178,6 +303,10 @@ async def generate_personalized_response(
         
         # Получаем сгенерированный ответ
         generated_response = response.choices[0].message.content
+        
+        # Добавляем ответ ассистента в историю, если есть контекст
+        if memory_context:
+            memory_context.add_message("assistant", generated_response)
         
         # Логируем успешную генерацию ответа
         logger.info(f"Успешно сгенерирован персонализированный ответ с моделью {model}")

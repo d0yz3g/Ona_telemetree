@@ -107,18 +107,19 @@ async def handle_voice_message(message: Message, state: FSMContext):
             Мой ответ должен быть структурирован, конкретен и персонализирован.
             """
             
-            # Генерируем персонализированный ответ с учетом новых правил
+            # Генерируем персонализированный ответ с учетом новых правил и механизма сохранения диалога
             response = await generate_personalized_response(
                 text, 
                 user_profile, 
                 conversation_history,
-                additional_instructions=interactive_prompt
+                additional_instructions=interactive_prompt,
+                user_id=message.from_user.id  # Передаем ID пользователя для механизма сохранения диалога
             )
             
             # Резюмируем сообщение пользователя (<30 слов) для сохранения контекста
             user_message_summary = text[:150] + "..." if len(text) > 150 else text
             
-            # Обновляем историю переписки
+            # Обновляем историю переписки для совместимости со старым механизмом
             conversation_history.append({"role": "user", "content": user_message_summary})
             conversation_history.append({"role": "assistant", "content": response})
             

@@ -138,21 +138,22 @@ async def handle_text_message(message: Message, state: FSMContext):
             # Проверяем, является ли сообщение запросом о профиле
             if is_profile_query(message.text):
                 # Если это запрос о профиле, используем специализированный анализ
-                response = await analyze_profile(user_profile, message.text)
+                response = await analyze_profile(user_profile, message.text, message.from_user.id)
                 logger.info(f"Выполнен анализ профиля для пользователя {message.from_user.id}")
             else:
-                # Иначе генерируем персонализированный ответ с учетом новых правил
+                # Иначе генерируем персонализированный ответ с учетом новых правил и механизма сохранения диалога
                 response = await generate_personalized_response(
                     message.text, 
                     user_profile, 
                     conversation_history,
-                    additional_instructions=interactive_prompt
+                    additional_instructions=interactive_prompt,
+                    user_id=message.from_user.id  # Передаем ID пользователя для механизма сохранения диалога
                 )
             
             # Резюмируем сообщение пользователя (<30 слов) для сохранения контекста
             user_message_summary = message.text[:150] + "..." if len(message.text) > 150 else message.text
             
-            # Обновляем историю переписки
+            # Обновляем историю переписки для совместимости со старым механизмом
             conversation_history.append({"role": "user", "content": user_message_summary})
             conversation_history.append({"role": "assistant", "content": response})
             
