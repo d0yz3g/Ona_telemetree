@@ -90,7 +90,7 @@ DEFAULT_RESPONSES = {
 }
 
 # Максимальное количество сообщений в истории диалога
-MAX_HISTORY_LENGTH = 7
+MAX_HISTORY_LENGTH = 15
 
 class MemoryContext:
     """
@@ -115,6 +115,36 @@ class MemoryContext:
         })
         
         # Если история слишком длинная, удаляем старые сообщения
+        if len(self.conversation_history) > MAX_HISTORY_LENGTH:
+            # Сохраняем первое системное сообщение, если оно есть
+            if self.conversation_history and self.conversation_history[0]["role"] == "system":
+                self.conversation_history = [self.conversation_history[0]] + self.conversation_history[-(MAX_HISTORY_LENGTH-1):]
+            else:
+                self.conversation_history = self.conversation_history[-MAX_HISTORY_LENGTH:]
+    
+    def add_messages_from_history(self, history: List[Dict[str, str]]):
+        """
+        Добавляет сообщения из внешней истории (для синхронизации со state)
+        
+        Args:
+            history: Список сообщений из внешней истории
+        """
+        if not history:
+            return
+        
+        # Очищаем текущую историю, оставляя только системное сообщение, если оно есть
+        if self.conversation_history and self.conversation_history[0]["role"] == "system":
+            system_message = self.conversation_history[0]
+            self.conversation_history = [system_message]
+        else:
+            self.conversation_history = []
+        
+        # Добавляем сообщения из внешней истории
+        for message in history[-MAX_HISTORY_LENGTH:]:  # Берем только последние MAX_HISTORY_LENGTH сообщений
+            if message["role"] != "system":  # Не дублируем системные сообщения
+                self.conversation_history.append(message)
+        
+        # Обрезаем историю, если она стала слишком длинной
         if len(self.conversation_history) > MAX_HISTORY_LENGTH:
             # Сохраняем первое системное сообщение, если оно есть
             if self.conversation_history and self.conversation_history[0]["role"] == "system":
@@ -240,6 +270,11 @@ async def generate_personalized_response(
             memory_context = get_user_memory_context(user_id)
             # Устанавливаем профиль пользователя в контексте
             memory_context.set_user_profile(user_profile)
+            
+            # Синхронизируем историю из state с нашим контекстом, если она предоставлена
+            if conversation_history:
+                memory_context.add_messages_from_history(conversation_history)
+            
             # Добавляем сообщение пользователя в историю
             memory_context.add_message("user", message_text)
         
@@ -247,6 +282,9 @@ async def generate_personalized_response(
         if memory_context:
             # Используем контекст памяти
             messages = memory_context.get_full_context()
+            
+            # Дополнительный логгинг для отладки
+            logger.info(f"Использую историю диалога из MemoryContext ({len(memory_context.conversation_history)} сообщений)")
         else:
             # Готовим промт для генерации ответа с использованием правил из rules2.0
             system_prompt = f"""

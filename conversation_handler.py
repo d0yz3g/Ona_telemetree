@@ -106,11 +106,15 @@ async def handle_text_message(message: Message, state: FSMContext):
     personality_type = user_data.get("personality_type", None)
     profile_text = user_data.get("profile_text", "")
     
+    # Принудительно логируем статус профиля для отладки
+    logger.info(f"Статус профиля пользователя {message.from_user.id}: profile_completed={user_data.get('profile_completed', False)}, personality_type={personality_type}")
+    
     # Если тип личности не указан явно, определяем его из текста профиля
     if not personality_type and profile_text:
         personality_type = await get_personality_type_from_profile(profile_text)
         # Сохраняем тип личности в состоянии
         await state.update_data(personality_type=personality_type)
+        logger.info(f"Определен тип личности из профиля: {personality_type}")
     
     # Создаем словарь с профилем пользователя
     user_profile = {
@@ -120,6 +124,9 @@ async def handle_text_message(message: Message, state: FSMContext):
     
     # Получаем историю переписки (если есть)
     conversation_history = user_data.get("conversation_history", [])
+    
+    # Логируем размер истории диалога
+    logger.info(f"Размер истории диалога пользователя {message.from_user.id}: {len(conversation_history)} сообщений")
     
     try:
         # Формируем инструкцию для генерации ответа на основе правил из rules2.0
@@ -148,6 +155,7 @@ async def handle_text_message(message: Message, state: FSMContext):
         
         ВАЖНО: На каждый запрос генерируй УНИКАЛЬНЫЙ ответ, а не используй шаблоны.
         ВАЖНО: Всегда отвечай на конкретный вопрос пользователя.
+        ВАЖНО: Используй предыдущие сообщения пользователя для создания более персонализированного ответа.
         
         Запрос пользователя: {message.text}
         Тип личности пользователя: {personality_type}
@@ -168,7 +176,7 @@ async def handle_text_message(message: Message, state: FSMContext):
                 user_id=message.from_user.id  # Передаем ID пользователя для механизма сохранения диалога
             )
         
-        # Резюмируем сообщение пользователя (<30 слов) для сохранения контекста
+        # Резюмируем сообщение пользователя для сохранения контекста
         user_message_summary = message.text[:150] + "..." if len(message.text) > 150 else message.text
         
         # Обновляем историю переписки для совместимости со старым механизмом
@@ -247,9 +255,29 @@ async def show_profile(message: Message, state: FSMContext):
     # Получаем данные пользователя из состояния
     user_data = await state.get_data()
     
+    # Логируем запрос профиля для отладки
+    logger.info(f"Запрос профиля от пользователя {message.from_user.id}. Данные профиля: profile_completed={user_data.get('profile_completed', False)}")
+    
     # Проверяем, есть ли у пользователя профиль
     if user_data.get("profile_completed", False):
         profile_text = user_data.get("profile_text", "")
+        
+        # Проверка на наличие текста профиля
+        if not profile_text:
+            logger.warning(f"Профиль пользователя {message.from_user.id} помечен как заполненный, но текст профиля отсутствует")
+            # Сбрасываем флаг профиля
+            await state.update_data(profile_completed=False)
+            # Предлагаем пройти опрос
+            await message.answer(
+                "Ваш профиль оказался пустым. Хотите пройти опрос для создания психологического профиля?",
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "✅ Да, начать опрос", "callback_data": "start_survey"}],
+                        [{"text": "❌ Нет, позже", "callback_data": "cancel_survey"}]
+                    ]
+                }
+            )
+            return
         
         # Отправляем профиль
         await message.answer(
