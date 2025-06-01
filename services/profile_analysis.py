@@ -22,6 +22,7 @@ if OPENAI_API_KEY:
             api_key=OPENAI_API_KEY,
             http_client=http_client
         )
+        logger.info("OpenAI API клиент успешно инициализирован в profile_analysis.py")
     except Exception as e:
         logger.error(f"Ошибка при инициализации OpenAI API: {e}")
 
@@ -41,10 +42,8 @@ async def analyze_profile(user_profile: Dict[str, Any], query: str, user_id: Opt
     personality_type = user_profile.get("personality_type", "Интеллектуальный")
     profile_text = user_profile.get("profile_text", "")
     
-    # Если нет клиента OpenAI, возвращаем сообщение об ошибке
-    if not client:
-        logger.warning("OpenAI API недоступен при анализе профиля")
-        return "Извините, я не могу выполнить анализ профиля в данный момент из-за технических ограничений. Попробуйте позже."
+    # Проверяем, есть ли API клиент OpenAI
+    use_fallback_response = not client
     
     # Если нет профиля, генерируем базовый ответ вместо сообщения об отсутствии профиля
     if not profile_text:
@@ -125,6 +124,24 @@ async def analyze_profile(user_profile: Dict[str, Any], query: str, user_id: Opt
         return basic_responses.get(personality_type, basic_responses["Интеллектуальный"])
     
     try:
+        # Если используем заглушку, сразу возвращаем базовый ответ
+        if use_fallback_response:
+            logger.warning("OpenAI API недоступен при анализе профиля, используем заглушку")
+            return f"""Здравствуй, {personality_type.lower()} исследователь!
+
+Я проанализировал твой профиль и вижу в нём множество интересных аспектов. Твой запрос: "{query}" затрагивает важные грани твоей личности.
+
+⸻
+
+Твоя индивидуальность раскрывается через основные психологические модули, которые составляют ядро твоей личности. Они определяют твой уникальный подход к жизни, отношениям и внутреннему миру.
+
+Вижу в тебе глубину и многогранность, которая проявляется как в твоих сильных сторонах, так и в зонах роста. Продолжай своё развитие, опираясь на собственные ресурсы.
+
+Что хочешь исследовать дальше?
+1. Конкретный модуль твоего профиля
+2. Практические рекомендации по саморазвитию
+3. Глубинные аспекты твоей психологической структуры"""
+            
         # Импортируем класс MemoryContext (если используется для сохранения контекста диалога)
         if user_id is not None:
             from communication_handler import get_user_memory_context
@@ -171,25 +188,54 @@ async def analyze_profile(user_profile: Dict[str, Any], query: str, user_id: Opt
             ]
 
         # Отправляем запрос в OpenAI
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            temperature=0.7,
-            messages=messages
-        )
-        
-        # Получаем сгенерированный ответ
-        analysis_result = response.choices[0].message.content
-        
-        # Сохраняем ответ в истории диалога
-        if user_id is not None and 'memory_context' in locals():
-            memory_context.add_message("assistant", analysis_result)
-        
-        logger.info(f"Анализ профиля успешно выполнен для типа личности: {personality_type}")
-        return analysis_result
+        try:
+            response = await client.chat.completions.create(
+                model="gpt-4o",
+                temperature=0.7,
+                messages=messages
+            )
+            
+            # Получаем сгенерированный ответ
+            analysis_result = response.choices[0].message.content
+            
+            # Сохраняем ответ в истории диалога
+            if user_id is not None and 'memory_context' in locals():
+                memory_context.add_message("assistant", analysis_result)
+            
+            logger.info(f"Анализ профиля успешно выполнен для типа личности: {personality_type}")
+            return analysis_result
+        except Exception as e:
+            # Проверяем, связана ли ошибка с превышением квоты
+            error_str = str(e)
+            if "quota" in error_str.lower() or "insufficient_quota" in error_str or "429" in error_str:
+                logger.error(f"Ошибка квоты OpenAI API при анализе профиля: {e}. Переключаемся на базовый ответ.")
+                use_fallback_response = True
+            else:
+                # Если ошибка другого типа, пробрасываем её дальше
+                raise e
+            
+            # Если сработала ошибка квоты, возвращаем базовый ответ
+            if use_fallback_response:
+                fallback_response = f"""Здравствуй, {personality_type.lower()} исследователь!
+
+Я изучил твой психологический профиль и вижу, что твой запрос "{query}" затрагивает важные аспекты твоей личности.
+
+⸻
+
+В твоём профиле раскрывается уникальная комбинация черт и особенностей, формирующих твой подход к жизни. Твой психологический тип {personality_type} определяет многие аспекты твоего восприятия мира и взаимодействия с ним.
+
+Продолжай исследовать свои сильные стороны и зоны роста, опираясь на основные модули профиля.
+
+Что хочешь исследовать дальше?
+1. Конкретные аспекты твоего профиля
+2. Практические рекомендации для развития
+3. Глубинное понимание твоих мотивов и стремлений"""
+                
+                return fallback_response
         
     except Exception as e:
         logger.error(f"Ошибка при анализе профиля: {e}")
-        return f"Произошла ошибка при анализе вашего профиля. Пожалуйста, попробуйте позже."
+        return f"Произошла ошибка при анализе вашего профиля. Пожалуйста, попробуйте позже. Техническая информация: {str(e)}"
 
 async def get_profile_insights(user_profile: Dict[str, Any]) -> Dict[str, List[str]]:
     """

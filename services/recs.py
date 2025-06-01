@@ -23,6 +23,7 @@ if OPENAI_API_KEY:
             api_key=OPENAI_API_KEY,
             http_client=http_client
         )
+        logger.info("OpenAI API клиент успешно инициализирован в services/recs.py")
     except Exception as e:
         logger.error(f"Ошибка при инициализации OpenAI API: {e}")
 
@@ -219,7 +220,12 @@ async def detect_intent_with_ai(text: str) -> Tuple[str, float]:
             return detected_intent, 0.6
             
     except Exception as e:
-        logger.error(f"Ошибка при определении намерения: {e}")
+        error_str = str(e)
+        if "quota" in error_str.lower() or "insufficient_quota" in error_str or "429" in error_str:
+            logger.error(f"Ошибка квоты OpenAI API при определении намерения: {e}. Используем правила.")
+        else:
+            logger.error(f"Ошибка при определении намерения: {e}")
+        
         # В случае ошибки используем правила
         detected_intent, _ = await detect_intent_and_focus(text)
         return detected_intent, 0.5
@@ -253,16 +259,20 @@ async def generate_response(text: str, user_id: int) -> str:
     logger.info(f"Определено намерение: {intent} с уверенностью {confidence}. Фокус: {focus}")
     
     # Если API-ключ OpenAI не настроен или клиент не инициализирован
-    if not client:
-        if intent == "support":
-            return DEFAULT_RECOMMENDATIONS.get(focus, DEFAULT_RECOMMENDATIONS["default"])
-        elif intent == "greeting":
-            # Для приветствий выбираем случайный ответ из заготовленных
-            return random.choice(GREETING_RESPONSES)
-        else:
-            return DEFAULT_RESPONSES.get(intent, DEFAULT_RESPONSES["support"])
+    use_default_response = not client
     
     try:
+        # Если не используем OpenAI, возвращаем заготовленный ответ
+        if use_default_response:
+            logger.warning("OpenAI API недоступен для генерации ответа, используем заготовки")
+            if intent == "support":
+                return DEFAULT_RECOMMENDATIONS.get(focus, DEFAULT_RECOMMENDATIONS["default"])
+            elif intent == "greeting":
+                # Для приветствий выбираем случайный ответ из заготовленных
+                return random.choice(GREETING_RESPONSES)
+            else:
+                return DEFAULT_RESPONSES.get(intent, DEFAULT_RESPONSES["support"])
+        
         # Создаем запрос к OpenAI в зависимости от намерения
         if intent == "question":
             system_prompt = """Ты — чуткий и поэтичный AI-собеседник проекта ONA. Ты даёшь глубокие, ясные ответы на вопросы, используя мягкий, поддерживающий тон. Твои ответы должны быть информативными, но не сухими — добавляй образность и метафоры, сохраняя научную точность. Обращайся к пользователю на «ты». Ответ должен быть на русском языке."""
@@ -282,32 +292,47 @@ async def generate_response(text: str, user_id: int) -> str:
             focus_description = AVAILABLE_FOCUSES[focus]
             system_prompt = f"""Ты — чуткий и поэтичный психолог-наставник проекта ONA. Дай 1–2 коротких, практических и вдохновляющих совета для поддержки пользователя с фокусом: {focus_description}. Используй образный язык и метафоры, помогая увидеть ситуацию в новом свете. Твои слова должны согревать и придавать сил. Обращайся к пользователю на «ты». Ответ должен быть на русском языке, не более 3-4 предложений, без введения и заключения."""
         
-        response = await client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            temperature=0.7,
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user",
-                    "content": text
-                }
-            ]
-        )
-        
-        # Получаем результат
-        result = response.choices[0].message.content.strip()
-        logger.info(f"Сгенерирован ответ для пользователя {user_id} с намерением '{intent}' и фокусом '{focus}'")
-        
-        return result
+        try:
+            response = await client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                temperature=0.7,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": system_prompt
+                    },
+                    {
+                        "role": "user",
+                        "content": text
+                    }
+                ]
+            )
+            
+            # Получаем результат
+            result = response.choices[0].message.content.strip()
+            logger.info(f"Сгенерирован ответ для пользователя {user_id} с намерением '{intent}' и фокусом '{focus}'")
+            
+            return result
+        except Exception as e:
+            error_str = str(e)
+            if "quota" in error_str.lower() or "insufficient_quota" in error_str or "429" in error_str:
+                logger.error(f"Ошибка квоты OpenAI API при генерации ответа: {e}. Используем заготовленный ответ.")
+                use_default_response = True
+            else:
+                logger.error(f"Ошибка при генерации ответа: {e}")
+                raise e
         
     except Exception as e:
-        logger.error(f"Ошибка при генерации ответа: {e}")
-        # В случае ошибки также возвращаем заготовленный ответ
+        logger.error(f"Общая ошибка при генерации ответа: {e}")
+        use_default_response = True
+    
+    # В случае ошибки или если API недоступен, используем заготовленный ответ
+    if use_default_response:
         if intent == "support":
             return DEFAULT_RECOMMENDATIONS.get(focus, DEFAULT_RECOMMENDATIONS["default"])
+        elif intent == "greeting":
+            # Для приветствий выбираем случайный ответ из заготовленных
+            return random.choice(GREETING_RESPONSES)
         else:
             return DEFAULT_RESPONSES.get(intent, DEFAULT_RESPONSES["support"])
 
