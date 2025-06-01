@@ -76,134 +76,145 @@ async def handle_text_message(message: Message, state: FSMContext):
     ]:
         return
     
-    # Показываем индикатор "печатает..."
-    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    
     # Получаем данные пользователя из состояния
     user_data = await state.get_data()
     
     # Проверяем, есть ли у пользователя профиль
-    if user_data.get("profile_completed", False):
-        # Получаем тип личности
-        personality_type = user_data.get("personality_type", None)
-        profile_text = user_data.get("profile_text", "")
-        
-        # Если тип личности не указан явно, определяем его из текста профиля
-        if not personality_type and profile_text:
-            personality_type = await get_personality_type_from_profile(profile_text)
-            # Сохраняем тип личности в состоянии
-            await state.update_data(personality_type=personality_type)
-        
-        # Создаем словарь с профилем пользователя
-        user_profile = {
-            "personality_type": personality_type or "Интеллектуальный",
-            "profile_text": profile_text
-        }
-        
-        # Получаем историю переписки (если есть)
-        conversation_history = user_data.get("conversation_history", [])
-        
-        try:
-            # Формируем инструкцию для генерации ответа на основе правил из rules2.0
-            interactive_prompt = f"""
-            Я психолог-консультант, следующий принципам поэтично-лирического стиля общения.
+    if not user_data.get("profile_completed", False):
+        # Проверяем, было ли уже отправлено приглашение пройти опрос
+        # чтобы избежать дублирования сообщений
+        last_message_sent = user_data.get("last_message_sent", "")
+        if "пройти опрос" in last_message_sent:
+            # Если уже отправляли приглашение пройти опрос, не отправляем его снова
+            return
             
-            Правила общения:
-            1. Поэтично-лирический стиль с лёгким футуристическим юмором и яркими метафорами.
-            2. Полная честность без лести и преувеличений.
-            3. В темах науки, бизнеса или нейро-биохакинга – чёткая, лаконичная, научно-обоснованная проза.
-            4. Разговорный и интерактивный тон (ментор и со-творец, не лектор).
-            
-            Структура ответа:
-            - Начинай с короткого, тёплого обращения.
-            - Используй неформальное обращение на "ты".
-            - Разделяй блоки символом ⸻ для создания визуальной паузы.
-            - Задавай личные вопросы, углубляющие мотивы и смыслы.
-            - После раскрытия темы предлагай три варианта "куда дальше".
-            - Используй короткие абзацы (1-3 предложения).
-            - Подчеркивай творческую автономию и свободу выбора собеседника.
-            
-            Баланс в ответе:
-            - 60% конкретные идеи и рекомендации
-            - 30% поэтичные метафоры и образы
-            - 10% глубокие вопросы для размышления
-            
-            ВАЖНО: На каждый запрос генерируй УНИКАЛЬНЫЙ ответ, а не используй шаблоны.
-            ВАЖНО: Всегда отвечай на конкретный вопрос пользователя.
-            
-            Запрос пользователя: {message.text}
-            Тип личности пользователя: {personality_type}
-            """
-            
-            # Проверяем, является ли сообщение запросом о профиле
-            if is_profile_query(message.text):
-                # Если это запрос о профиле, используем специализированный анализ
-                response = await analyze_profile(user_profile, message.text, message.from_user.id)
-                logger.info(f"Выполнен анализ профиля для пользователя {message.from_user.id}")
-            else:
-                # Иначе генерируем персонализированный ответ с учетом новых правил и механизма сохранения диалога
-                response = await generate_personalized_response(
-                    message.text, 
-                    user_profile, 
-                    conversation_history,
-                    additional_instructions=interactive_prompt,
-                    user_id=message.from_user.id  # Передаем ID пользователя для механизма сохранения диалога
-                )
-            
-            # Резюмируем сообщение пользователя (<30 слов) для сохранения контекста
-            user_message_summary = message.text[:150] + "..." if len(message.text) > 150 else message.text
-            
-            # Обновляем историю переписки для совместимости со старым механизмом
-            conversation_history.append({"role": "user", "content": user_message_summary})
-            conversation_history.append({"role": "assistant", "content": response})
-            
-            # Обрезаем историю переписки, чтобы она не была слишком длинной
-            if len(conversation_history) > 20:
-                conversation_history = conversation_history[-20:]
-            
-            # Обновляем состояние
-            await state.update_data(conversation_history=conversation_history)
-            
-            # Отправляем ответ
-            await message.answer(response)
-            
-            logger.info(f"Отправлен персонализированный ответ пользователю {message.from_user.id} (тип: {personality_type})")
-            
-        except Exception as e:
-            logger.error(f"Ошибка при генерации персонализированного ответа: {e}")
-            # Проверяем, связана ли ошибка с отсутствием API ключа
-            if "OPENAI_API_KEY" in str(e) or "authentication" in str(e).lower() or "api key" in str(e).lower():
-                await message.answer(
-                    "Здравствуй, искатель знаний!\n\n"
-                    "К сожалению, сейчас я не могу сгенерировать персонализированный ответ из-за проблем с API ключом.\n\n"
-                    "⸻\n\n"
-                    "Для администратора: Пожалуйста, проверьте настройки OPENAI_API_KEY в файле .env\n\n"
-                    "Что ты хочешь сделать дальше?\n"
-                    "- Задать другой вопрос?\n"
-                    "- Перезапустить бота командой /restart?\n"
-                    "- Обратиться к администратору?"
-                )
-            else:
-                # Отправляем общий ответ в случае ошибки
-                await message.answer(
-                    "Здравствуй, исследователь глубин!\n\n"
-                    "Произошла ошибка при обработке твоего сообщения. Пожалуйста, повтори попытку позже или попробуй перезапустить бота.\n\n"
-                    "⸻\n\n"
-                    "Что ты хочешь сделать дальше?\n"
-                    "- Повторить вопрос?\n"
-                    "- Перезапустить бота командой /restart?\n"
-                    "- Спросить что-то другое?"
-                )
-    else:
         # Если профиля нет, предлагаем пройти опрос
         builder = InlineKeyboardBuilder()
         builder.button(text="✅ Начать опрос", callback_data="start_survey")
         
-        await message.answer(
-            "Чтобы получить более персонализированные ответы, рекомендую пройти опрос и создать ваш психологический профиль. "
-            "Это позволит мне лучше понять ваши особенности и адаптировать свои ответы под ваш стиль мышления.",
-            reply_markup=builder.as_markup()
-        )
+        invite_message = "У вас еще нет полного профиля. Пожалуйста, пройдите опрос для создания психологического профиля."
+        await message.answer(invite_message, reply_markup=builder.as_markup())
+        
+        # Сохраняем последнее отправленное сообщение, чтобы избежать дублирования
+        await state.update_data(last_message_sent=invite_message)
+        return
+    
+    # Показываем индикатор "печатает..."
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    
+    # Получаем тип личности
+    personality_type = user_data.get("personality_type", None)
+    profile_text = user_data.get("profile_text", "")
+    
+    # Если тип личности не указан явно, определяем его из текста профиля
+    if not personality_type and profile_text:
+        personality_type = await get_personality_type_from_profile(profile_text)
+        # Сохраняем тип личности в состоянии
+        await state.update_data(personality_type=personality_type)
+    
+    # Создаем словарь с профилем пользователя
+    user_profile = {
+        "personality_type": personality_type or "Интеллектуальный",
+        "profile_text": profile_text
+    }
+    
+    # Получаем историю переписки (если есть)
+    conversation_history = user_data.get("conversation_history", [])
+    
+    try:
+        # Формируем инструкцию для генерации ответа на основе правил из rules2.0
+        interactive_prompt = f"""
+        Я психолог-консультант, следующий принципам поэтично-лирического стиля общения.
+        
+        Правила общения:
+        1. Поэтично-лирический стиль с лёгким футуристическим юмором и яркими метафорами.
+        2. Полная честность без лести и преувеличений.
+        3. В темах науки, бизнеса или нейро-биохакинга – чёткая, лаконичная, научно-обоснованная проза.
+        4. Разговорный и интерактивный тон (ментор и со-творец, не лектор).
+        
+        Структура ответа:
+        - Начинай с короткого, тёплого обращения.
+        - Используй неформальное обращение на "ты".
+        - Разделяй блоки символом ⸻ для создания визуальной паузы.
+        - Задавай личные вопросы, углубляющие мотивы и смыслы.
+        - После раскрытия темы предлагай три варианта "куда дальше".
+        - Используй короткие абзацы (1-3 предложения).
+        - Подчеркивай творческую автономию и свободу выбора собеседника.
+        
+        Баланс в ответе:
+        - 60% конкретные идеи и рекомендации
+        - 30% поэтичные метафоры и образы
+        - 10% глубокие вопросы для размышления
+        
+        ВАЖНО: На каждый запрос генерируй УНИКАЛЬНЫЙ ответ, а не используй шаблоны.
+        ВАЖНО: Всегда отвечай на конкретный вопрос пользователя.
+        
+        Запрос пользователя: {message.text}
+        Тип личности пользователя: {personality_type}
+        """
+        
+        # Проверяем, является ли сообщение запросом о профиле
+        if is_profile_query(message.text):
+            # Если это запрос о профиле, используем специализированный анализ
+            response = await analyze_profile(user_profile, message.text, message.from_user.id)
+            logger.info(f"Выполнен анализ профиля для пользователя {message.from_user.id}")
+        else:
+            # Иначе генерируем персонализированный ответ с учетом новых правил и механизма сохранения диалога
+            response = await generate_personalized_response(
+                message.text, 
+                user_profile, 
+                conversation_history,
+                additional_instructions=interactive_prompt,
+                user_id=message.from_user.id  # Передаем ID пользователя для механизма сохранения диалога
+            )
+        
+        # Резюмируем сообщение пользователя (<30 слов) для сохранения контекста
+        user_message_summary = message.text[:150] + "..." if len(message.text) > 150 else message.text
+        
+        # Обновляем историю переписки для совместимости со старым механизмом
+        conversation_history.append({"role": "user", "content": user_message_summary})
+        conversation_history.append({"role": "assistant", "content": response})
+        
+        # Обрезаем историю переписки, чтобы она не была слишком длинной
+        if len(conversation_history) > 20:
+            conversation_history = conversation_history[-20:]
+        
+        # Обновляем состояние
+        await state.update_data(conversation_history=conversation_history)
+        
+        # Сохраняем последнее отправленное сообщение, чтобы избежать дублирования
+        await state.update_data(last_message_sent=response)
+        
+        # Отправляем ответ
+        await message.answer(response)
+        
+        logger.info(f"Отправлен персонализированный ответ пользователю {message.from_user.id} (тип: {personality_type})")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при генерации персонализированного ответа: {e}")
+        # Проверяем, связана ли ошибка с отсутствием API ключа
+        if "OPENAI_API_KEY" in str(e) or "authentication" in str(e).lower() or "api key" in str(e).lower():
+            await message.answer(
+                "Здравствуй, искатель знаний!\n\n"
+                "К сожалению, сейчас я не могу сгенерировать персонализированный ответ из-за проблем с API ключом.\n\n"
+                "⸻\n\n"
+                "Для администратора: Пожалуйста, проверьте настройки OPENAI_API_KEY в файле .env\n\n"
+                "Что ты хочешь сделать дальше?\n"
+                "- Задать другой вопрос?\n"
+                "- Перезапустить бота командой /restart?\n"
+                "- Обратиться к администратору?"
+            )
+        else:
+            # Отправляем общий ответ в случае ошибки
+            await message.answer(
+                "Здравствуй, исследователь глубин!\n\n"
+                "Произошла ошибка при обработке твоего сообщения. Пожалуйста, повтори попытку позже или попробуй перезапустить бота.\n\n"
+                "⸻\n\n"
+                "Что ты хочешь сделать дальше?\n"
+                "- Повторить вопрос?\n"
+                "- Перезапустить бота командой /restart?\n"
+                "- Спросить что-то другое?"
+            )
 
 @conversation_router.callback_query(F.data == "start_survey")
 async def start_survey_from_callback(callback: CallbackQuery, state: FSMContext):
