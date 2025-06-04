@@ -1,18 +1,50 @@
-# Виртуальные окружения
-venv/
-.venv/
-env/
-ENV/
-
-# Кэш и компилированные файлы Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
+
+# Distribution / packaging
 .Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python environments
+.env
+.python-version
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
 
 # Файлы окружения и секреты
-.env
 env.bak/
 *.env
 
@@ -33,13 +65,6 @@ tmp/
 *.db
 *.sqlite
 *.sqlite3
-
-# Файлы IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-.DS_Store
 
 # Файлы Docker
 .dockerignore
