@@ -279,7 +279,7 @@ dp.include_router(conversation_router)
 # Обработчик команды /start
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-        send_event_to_ga4(
+    send_event_to_ga4(
         user_id=message.from_user.id,
         event_name="start_command",
         event_params={"username": message.from_user.username or "unknown"}
