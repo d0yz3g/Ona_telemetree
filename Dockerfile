@@ -114,6 +114,9 @@ RUN touch /app/logs/bot.log /app/logs/restart.log
 # Установка psutil отдельно (часто требуется для системных операций)
 RUN pip install psutil
 
+# Добавляем aiosqlite явно (для работы с SQLite)
+RUN pip install aiosqlite==0.20.0
+
 # Добавление скрипта для проверки и остановки запущенных процессов бота
 RUN echo '#!/bin/bash\n\
 # Проверяем наличие запущенных процессов бота\n\

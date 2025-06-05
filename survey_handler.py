@@ -8,6 +8,7 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 
 from button_states import SurveyStates, ProfileStates
 from profile_generator import generate_profile, save_profile_to_db
+from db_utils import save_survey_answers, get_user_answers, get_profile_data
 
 # Импорт функции railway_print для логирования
 try:
@@ -467,6 +468,27 @@ async def complete_survey(message: Message, state: FSMContext, answers: Dict[str
     type_counts, primary_type, secondary_type = get_personality_type_from_answers(answers)
     
     try:
+        # Сохраняем ответы пользователя в базу данных
+        user_id = message.from_user.id
+        
+        # Преобразуем ответы из str:str в int:Union[str,int] для сохранения в базу
+        # Ключи должны быть целочисленными (ID вопросов)
+        db_answers = {}
+        for key, value in answers.items():
+            try:
+                # Пробуем преобразовать ключ в целое число
+                int_key = int(key)
+                db_answers[int_key] = value
+            except ValueError:
+                # Если ключ не является числом, пропускаем его
+                # (например, демографические данные: name, age, etc.)
+                continue
+                
+        # Сохраняем ответы в базу данных
+        answers_saved = await save_survey_answers(user_id, db_answers)
+        if not answers_saved:
+            logger.warning(f"Не удалось сохранить ответы пользователя {user_id} в базу данных")
+        
         # Генерируем профиль
         profile_data = await generate_profile(answers)
         
@@ -475,6 +497,11 @@ async def complete_survey(message: Message, state: FSMContext, answers: Dict[str
         
         # Логируем информацию о полученных профилях для отладки
         logger.info(f"Получен детальный профиль длиной {len(detailed_profile)} символов")
+        
+        # Сохраняем профиль в базу данных
+        profile_saved = await save_profile_to_db(user_id, detailed_profile, answers)
+        if not profile_saved:
+            logger.warning(f"Не удалось сохранить профиль пользователя {user_id} в базу данных")
         
         # Сбрасываем состояние опроса
         await state.set_state(None)
@@ -881,27 +908,30 @@ async def command_profile(message: Message, state: FSMContext):
         message: Сообщение от пользователя
         state: Состояние FSM
     
-    Примечание: Функция изменена для отображения полного профиля сразу
-    вместо краткой версии и промежуточных кнопок.
+    Примечание: Функция изменена для отображения профиля из базы данных SQLite.
     """
-    # Получаем данные пользователя
-    user_data = await state.get_data()
-    profile_completed = user_data.get("profile_completed", False)
+    # Получаем ID пользователя
+    user_id = message.from_user.id
     
-    if profile_completed:
-        # Показываем индикатор "печатает..."
-        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    # Показываем индикатор "печатает..."
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    
+    # Пытаемся загрузить профиль из базы данных
+    profile_text, personality_type = await get_profile_data(user_id)
+    
+    # Если профиль не найден в базе, проверяем в состоянии пользователя
+    if not profile_text:
+        # Получаем данные пользователя из состояния
+        user_data = await state.get_data()
+        profile_completed = user_data.get("profile_completed", False)
         
-        # Получаем детальный профиль
-        details_text = user_data.get("profile_details", "")
-        
-        if not details_text or len(details_text) < 20:
-            await message.answer(
-                "❌ <b>Ошибка:</b> Детальный профиль не найден или пуст. Пожалуйста, пройдите опрос заново.",
-                parse_mode="HTML"
-            )
-            return
-        
+        if profile_completed:
+            # Получаем детальный профиль из состояния
+            profile_text = user_data.get("profile_details", "")
+            personality_type = user_data.get("personality_type", "Интеллектуальный")
+    
+    # Проверяем, есть ли профиль
+    if profile_text and len(profile_text) >= 20:
         # Создаем клавиатуру с кнопками для действий
         builder = InlineKeyboardBuilder()
         builder.button(text="🔄 Пройти опрос заново", callback_data="restart_survey")
@@ -912,11 +942,11 @@ async def command_profile(message: Message, state: FSMContext):
         # Проверяем, не слишком ли длинный профиль для отправки в одном сообщении
         max_message_length = 4000  # Telegram ограничивает сообщения примерно до 4096 символов
         
-        if len(details_text) > max_message_length:
+        if len(profile_text) > max_message_length:
             # Разбиваем детальный профиль на части
             parts = []
             current_part = ""
-            for line in details_text.split('\n'):
+            for line in profile_text.split('\n'):
                 if len(current_part) + len(line) + 1 <= max_message_length:
                     current_part += line + '\n'
                 else:
@@ -942,13 +972,24 @@ async def command_profile(message: Message, state: FSMContext):
         else:
             # Отправляем профиль
             await message.answer(
-                details_text,
+                profile_text,
                 parse_mode="HTML",
                 reply_markup=builder.as_markup()
             )
         
+        # Сохраняем информацию о профиле в состоянии
+        await state.update_data(
+            profile_completed=True,
+            profile_details=profile_text,
+            profile_text=profile_text,
+            personality_type=personality_type
+        )
+        
         # Устанавливаем состояние просмотра профиля
         await state.set_state(ProfileStates.viewing)
+        
+        # Логируем просмотр профиля
+        logger.info(f"Пользователь {user_id} просмотрел свой профиль")
     else:
         # Предлагаем пройти опрос, если профиля нет
         builder = InlineKeyboardBuilder()
@@ -1020,14 +1061,36 @@ async def command_advice(message: Message, state: FSMContext):
         message: Сообщение от пользователя
         state: Состояние FSM
     """
-    # Получаем данные пользователя
-    user_data = await state.get_data()
-    profile_completed = user_data.get("profile_completed", False)
+    # Получаем ID пользователя
+    user_id = message.from_user.id
     
-    if profile_completed:
-        # Если профиль есть, получаем тип личности
-        personality_type = user_data.get("personality_type", "Интеллектуальный")
+    # Показываем индикатор "печатает..."
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    
+    # Пытаемся загрузить профиль из базы данных
+    _, personality_type = await get_profile_data(user_id)
+    
+    # Если профиль не найден в базе, проверяем в состоянии пользователя
+    if not personality_type:
+        # Получаем данные пользователя из состояния
+        user_data = await state.get_data()
+        profile_completed = user_data.get("profile_completed", False)
         
+        if profile_completed:
+            personality_type = user_data.get("personality_type", "Интеллектуальный")
+        else:
+            # Предлагаем пройти опрос, если профиля нет
+            builder = InlineKeyboardBuilder()
+            builder.button(text="✅ Начать опрос", callback_data="start_survey")
+            
+            await message.answer(
+                "Чтобы получать персонализированные советы, необходимо сначала пройти психологический тест и создать ваш профиль.",
+                reply_markup=builder.as_markup()
+            )
+            return
+    
+    # Если тип личности найден, отправляем совет
+    if personality_type:
         # Получаем персонализированный совет на основе типа личности
         advice = get_personalized_advice(personality_type)
         
@@ -1048,6 +1111,9 @@ async def command_advice(message: Message, state: FSMContext):
             "Что вы хотите сделать дальше?",
             reply_markup=builder.as_markup()
         )
+        
+        # Логируем получение совета
+        logger.info(f"Пользователь {user_id} получил совет для типа личности {personality_type}")
     else:
         # Если профиля нет, предлагаем пройти опрос
         builder = InlineKeyboardBuilder()
@@ -1071,9 +1137,21 @@ async def get_advice_callback(callback: CallbackQuery, state: FSMContext):
     # Показываем индикатор "печатает..."
     await callback.message.bot.send_chat_action(chat_id=callback.message.chat.id, action="typing")
     
-    # Получаем данные пользователя
-    user_data = await state.get_data()
-    personality_type = user_data.get("personality_type", "Интеллектуальный")
+    # Получаем ID пользователя
+    user_id = callback.from_user.id
+    
+    # Пытаемся загрузить тип личности из базы данных
+    _, personality_type = await get_profile_data(user_id)
+    
+    # Если тип личности не найден в базе, проверяем в состоянии пользователя
+    if not personality_type:
+        # Получаем данные пользователя из состояния
+        user_data = await state.get_data()
+        personality_type = user_data.get("personality_type", "Интеллектуальный")
+    
+    # Если тип личности все еще не найден, используем стандартный тип
+    if not personality_type:
+        personality_type = "Интеллектуальный"
     
     # Получаем персонализированный совет
     advice = get_personalized_advice(personality_type)
@@ -1104,6 +1182,7 @@ async def get_advice_callback(callback: CallbackQuery, state: FSMContext):
     
     # Отвечаем на callback
     await callback.answer("Совет получен")
+    logger.info(f"Пользователь {user_id} получил совет для типа личности {personality_type}")
 
 # Функция для генерации персонализированных советов
 def get_personalized_advice(personality_type: str) -> str:
