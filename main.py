@@ -7,8 +7,8 @@ import socket  # Для получения имени хоста
 import uuid
 import requests
 
-MEASUREMENT_ID = 'G-T2T4RCC4ER'  # Заменить на твой
-API_SECRET = 'eZhrUz1XQ9Gd3rMObwXBhg'  # Заменить на твой
+MEASUREMENT_ID = 'G-MK7X38DQ0H'  # Заменить на твой
+API_SECRET = 'RoXblW3sTiSKOJTeeIR18w'  # Заменить на твой
 
 def send_event_to_ga4(user_id: int, event_name: str, event_params: dict = None):
     client_id = str(user_id) + '.' + str(uuid.uuid4())
