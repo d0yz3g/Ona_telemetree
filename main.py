@@ -7,9 +7,13 @@ import socket  # Для получения имени хоста
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import Command
-from aiogram.fsm.storage.memory import MemoryStorage
+from sqlite_storage import SQLiteStorage
+from db_utils import init_db, save_user
 from dotenv import load_dotenv
 from aiogram.types import BufferedInputFile
+
+# Путь к БД
+DB_PATH = os.getenv("DB_PATH", "BD_ONA.db")
 
 # Импортируем fcntl только для Unix-подобных систем
 if sys.platform != 'win32':
@@ -239,7 +243,7 @@ bot = Bot(
     disable_web_page_preview=True,  # Отключаем предпросмотр веб-страниц
     protect_content=False  # Разрешаем пересылку сообщений
 )
-dp = Dispatcher(storage=MemoryStorage())
+dp = Dispatcher(storage=SQLiteStorage())
 
 # Регистрируем роутеры в правильном порядке
 # Сначала регистрируем роутер опроса, чтобы он имел приоритет при обработке сообщений в состоянии опроса
@@ -255,6 +259,14 @@ dp.include_router(conversation_router)
 # Обработчик команды /start
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    # Сохраняем информацию о пользователе в базу данных
+    user_id = message.from_user.id
+    username = message.from_user.username
+    full_name = message.from_user.full_name
+    
+    # Сохраняем пользователя в базу данных
+    await save_user(user_id, username, full_name)
+    
     # Приветственное сообщение
     greeting_text = (
         f"👋 Привет, {message.from_user.first_name}!\n\n"
@@ -394,6 +406,13 @@ async def main():
     railway_print("Запуск основного цикла бота...", "INFO")
     
     try:
+        # Инициализируем базу данных
+        db_initialized = await init_db()
+        if not db_initialized:
+            railway_print("Предупреждение: База данных не полностью инициализирована", "WARNING")
+        else:
+            railway_print("База данных SQLite инициализирована успешно", "INFO")
+        
         # Удаляем все обновления, которые были пропущены (если бот был отключен)
         await bot.delete_webhook(drop_pending_updates=True)
         railway_print("Старые обновления удалены", "INFO")

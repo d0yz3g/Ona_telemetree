@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional
 from openai import AsyncOpenAI
 import httpx
 import asyncio
+from db_utils import save_profile_data
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -387,21 +388,19 @@ async def save_profile_to_db(user_id: int, profile_text: str, answers: Dict[str,
         bool: True, если сохранение успешно, иначе False
     """
     try:
-        # Подготовка данных для сохранения
-        profile_data = {
-            "profile_text": profile_text,
-            "answers": answers,
-            "created_at": str(asyncio.get_event_loop().time())
-        }
+        # Получаем тип личности из ответов
+        from questions import get_personality_type_from_answers
+        type_counts, primary_type, secondary_type = get_personality_type_from_answers(answers)
         
-        # Преобразуем данные в JSON
-        profile_json = json.dumps(profile_data, ensure_ascii=False)
+        # Сохраняем профиль в базу данных через функцию из db_utils
+        result = await save_profile_data(user_id, profile_text, primary_type)
         
-        # Здесь должен быть код для сохранения в базу данных
-        # В данной реализации это заглушка
-        logger.info(f"Профиль сохранен для пользователя {user_id}")
+        if result:
+            logger.info(f"Профиль сохранен в базу данных для пользователя {user_id}")
+        else:
+            logger.warning(f"Не удалось сохранить профиль в базу данных для пользователя {user_id}")
         
-        return True
+        return result
     except Exception as e:
         logger.error(f"Ошибка при сохранении профиля в базу данных: {e}")
         return False 
