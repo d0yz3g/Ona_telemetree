@@ -4,6 +4,30 @@ import os
 import sys
 import tempfile  # Для создания временного файла блокировки
 import socket  # Для получения имени хоста
+import uuid
+import requests
+
+MEASUREMENT_ID = 'G-T2T4RCC4ER'  # Заменить на твой
+API_SECRET = 'eZhrUz1XQ9Gd3rMObwXBhg'  # Заменить на твой
+
+def send_event_to_ga4(user_id: int, event_name: str, event_params: dict = None):
+    client_id = str(user_id) + '.' + str(uuid.uuid4())
+    payload = {
+        "client_id": client_id,
+        "events": [
+            {
+                "name": event_name,
+                "params": event_params or {}
+            }
+        ]
+    }
+    url = f'https://www.google-analytics.com/mp/collect?measurement_id={MEASUREMENT_ID}&api_secret={API_SECRET}'
+    try:
+        response = requests.post(url, json=payload)
+        print(f"GA4 status: {response.status_code}, body: {response.text}")
+    except Exception as e:
+        print(f"GA4 error: {e}")
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import Command
@@ -255,6 +279,11 @@ dp.include_router(conversation_router)
 # Обработчик команды /start
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+        send_event_to_ga4(
+        user_id=message.from_user.id,
+        event_name="start_command",
+        event_params={"username": message.from_user.username or "unknown"}
+    )
     """
     Обработчик команды /start
     """
