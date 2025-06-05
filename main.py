@@ -284,9 +284,7 @@ async def cmd_start(message: Message):
         event_name="start_command",
         event_params={"username": message.from_user.username or "unknown"}
     )
-    """
-    Обработчик команды /start
-    """
+    
     # Приветственное сообщение
     greeting_text = (
         f"👋 Привет, {message.from_user.first_name}!\n\n"
